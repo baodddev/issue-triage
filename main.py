@@ -29,7 +29,7 @@ tools = [
                 "properties":{
                     "component": {"type": "string", "description": "Tên component bị lỗi"},
                     "severity": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
-                    "alert_messasge": {"type": "string", "description": "Nội dung cảnh báo ngắn gọn"}
+                    "alert_message": {"type": "string", "description": "Nội dung cảnh báo ngắn gọn"}
                 },
                 "required" : ["component", "severity", "alert_message"]
             }
@@ -44,58 +44,65 @@ def execute_notify_oncall(component: str, severity: str, alert_message: str, **k
         "details": f"[{severity}] Cảnh báo cho {component}: {alert_message}"
     }
 
+
 SYSTEM_PROMPT = """
-Bạn là kỹ sư phụ trách phân loại sự cố phần mềm.
-Phân loại severity theo P0/P1/P2/P3 dựa trên dữ liệu issue. Nếu dữ liệu không
-đủ để phân loại, dùng status=insufficient_data thay vì đoán. Chỉ dùng
-status=out_of_scope khi nội dung không phải issue phần mềm. Nếu issue có mức độ nghiêm trọng (P0/P1) hoặc cần phản hồi khẩn cấp, hãy gọi tool `notify_oncall_team`.
+Bạn là một AI Triage Bot chuyên phân loại lỗi hệ thống phần mềm.
+
+QUY TẮC:
+1. Phân tích issue:
+   - Nếu mô tả có dịch vụ/lỗi rõ ràng -> status = "classified".
+   - Chỉ dùng "insufficient_data" khi người dùng chỉ nhập cụt ngủn như "lỗi rồi", "hỏng rồi".
+   - Chỉ dùng "out_of_scope" khi nội dung không liên quan đến kỹ thuật/phần mềm.
+
+2. QUY TẮC GỌI TOOL (BẮT BUỘC):
+   - Nếu issue là sự cố nghiêm trọng (P0 hoặc P1), hoặc ảnh hưởng diện rộng/tê liệt chức năng: Bạn BẮT BUỘC PHẢI GỌI TOOL `notify_oncall_team` ngay lập tức, không được bỏ qua.
 """
+def main():
+    user_issue = input("Nhập mô tả sự cố (Issue description): ")
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Issue input:\n{user_issue}\n"}
+    ]
 
-user_issue = input("Nhập mô tả sự cố (Issue description): ")
-messages = [
-    {"role": "system", "content": SYSTEM_PROMPT},
-    {"role": "user", "content": f"Issue input:\n{user_issue}\n"}
-]
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        tools=tools,
+        tool_choice="auto"
+    )
 
-response = client.chat.completions.create(
-    model=MODEL,
-    messages=messages,
-    tools=tools,
-    tool_choice="auto"
-)
+    response_message = response.choices[0].message
+    tool_calls = response_message.tool_calls
 
-response_message = response.choices[0].message
-tool_calls = response_message.tool_calls
+    if tool_calls:
+        messages.append(response_message)
+        for tool_call in tool_calls:
+            func_name = tool_call.function.name
+            func_args = json.loads(tool_call.function.arguments)
 
-if tool_calls:
-    messages.append(response_message)
-    for tool_call in tool_calls:
-        func_name = tool_call.function.name
-        func_args = json.loads(tool_call.function.arguments)
+            print("\n[TRACE 1: tool_call]")
+            print(f"Model yêu cầu gọi hàm: {func_name}")
+            print(f"Đối số: {func_args}")
 
-        print("\n[TRACE 1: tool_call]")
-        print(f"Model yêu cầu gọi hàm: {func_name}")
-        print(f"Đối số: {func_args}")
+            if func_name == "notify_oncall_team":
+                tool_output = execute_notify_oncall(**func_args)
+                print("\n[TRACE 2: application executes]")
+                print(f"Ứng dụng đã xử lý xong tool.")
 
-        if func_name == "notify_oncall_team":
-            tool_output = execute_notify_oncall(**func_args)
-            print("\n[TRACE 2: application executes]")
-            print(f"Ứng dụng đã xử lý xong tool.")
+                print("\n[TRACE 3: tool_result]")
+                print(f"Kết quả trả về cho model: {tool_output}")
 
-            print("\n[TRACE 3: tool_result]")
-            print(f"Kết quả trả về cho model: {tool_output}")
+    final_completion = client.beta.chat.completions.parse(
+        model=MODEL,
+        messages=messages,
+        response_format=IssueTriage
+    )
 
-final_completion = client.beta.chat.completions.parse(
-    model=MODEL,
-    messages=messages,
-    response_format=IssueTriage
-)
+    triage_result: IssueTriage = final_completion.choices[0].message.parsed
 
-triage_result: IssueTriage = final_completion.choices[0].message.parsed
-
-print("\n[TRACE 4: final response]")
-print("Type object:", type(triage_result))
-print(triage_result.model_dump_json(indent=2))
+    print("\n[TRACE 4: final response]")
+    print("Type object:", type(triage_result))
+    print(triage_result.model_dump_json(indent=2))
 
 if __name__ == "__main__":
     main()
