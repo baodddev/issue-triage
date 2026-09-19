@@ -96,3 +96,6 @@ triage_result: IssueTriage = final_completion.choices[0].message.parsed
 print("\n[TRACE 4: final response]")
 print("Type object:", type(triage_result))
 print(triage_result.model_dump_json(indent=2))
+
+if __name__ == "__main__":
+    main()
