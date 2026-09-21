@@ -11,7 +11,7 @@ MODEL = os.getenv("OPENAI_MODEL")
 
 # Dinh nghia schema
 class IssueTriage(BaseModel):
-    status: Literal["classified","insufficent_data","out_of_scope"]
+    status: Literal["classified","insufficient_data","out_of_scope"]
     severity: Literal["P0","P1","P2","P3"] | None = None
     component: str | None=None
     needs_urgent_response: bool = False
@@ -46,17 +46,28 @@ def execute_notify_oncall(component: str, severity: str, alert_message: str, **k
 
 
 SYSTEM_PROMPT = """
-Bạn là một AI Triage Bot chuyên phân loại lỗi hệ thống phần mềm.
+Bạn là một AI Triage Bot chuyên trách phân loại sự cố kỹ thuật và kích hoạt phản ứng khẩn cấp.
 
-QUY TẮC:
-1. Phân tích issue:
-   - Nếu mô tả có dịch vụ/lỗi rõ ràng -> status = "classified".
-   - Chỉ dùng "insufficient_data" khi người dùng chỉ nhập cụt ngủn như "lỗi rồi", "hỏng rồi".
-   - Chỉ dùng "out_of_scope" khi nội dung không liên quan đến kỹ thuật/phần mềm.
+TIÊU CHUẨN XÁC ĐỊNH MỨC ĐỘ (SEVERITY):
+- P0 (Blocker/Critical): Hệ thống ngừng hoạt động, sập dịch vụ cốt lõi, lỗi cổng thanh toán (HTTP 500, treo giao dịch), rò rỉ dữ liệu hoặc ảnh hưởng toàn bộ người dùng.
+- P1 (High): Một tính năng chính bị tê liệt nhưng có giải pháp tạm thời, hoặc ảnh hưởng một nhóm lớn người dùng.
+- P2 (Medium): Lỗi ảnh hưởng trải nghiệm người dùng nhưng nghiệp vụ chính vẫn hoạt động.
+- P3 (Low): Lỗi giao diện (UI), sai chính tả, gợi ý tính năng mới.
 
-2. QUY TẮC GỌI TOOL (BẮT BUỘC):
-   - Nếu issue là sự cố nghiêm trọng (P0 hoặc P1), hoặc ảnh hưởng diện rộng/tê liệt chức năng: Bạn BẮT BUỘC PHẢI GỌI TOOL `notify_oncall_team` ngay lập tức, không được bỏ qua.
+QUY TRÌNH XỬ LÝ (BẮT BUỘC THEO THỨ TỰ):
+Bước 1: Đánh giá nhanh mức độ sự cố.
+Bước 2: NẾU XÁC ĐỊNH LÀ P0 HOẶC P1:
+  - BẮT BUỘC PHẢI GỌI TOOL `notify_oncall_team` TRƯỚC TIÊN.
+  - TUYỆT ĐỐI KHÔNG xuất ra văn bản hay phân tích trực tiếp nếu chưa gọi tool này.
+Bước 3: Nếu là P2, P3, hoặc issue thiếu dữ liệu/ngoài phạm vi:
+  - KHÔNG gọi tool.
+
+QUY TẮC TRẠNG THÁI:
+- status = "classified": Issue có dịch vụ hoặc lỗi rõ ràng.
+- status = "insufficient_data": Chỉ dùng khi issue quá ngắn hoặc mơ hồ (ví dụ: "lỗi rồi", "hỏng app").
+- status = "out_of_scope": Không liên quan đến kỹ thuật phần mềm.
 """
+
 def main():
     user_issue = input("Nhập mô tả sự cố (Issue description): ")
     messages = [
@@ -76,6 +87,7 @@ def main():
 
     if tool_calls:
         messages.append(response_message)
+        
         for tool_call in tool_calls:
             func_name = tool_call.function.name
             func_args = json.loads(tool_call.function.arguments)
